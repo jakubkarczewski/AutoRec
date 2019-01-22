@@ -179,7 +179,7 @@ if __name__ == '__main__':
                         help="Id for inference.")
     args = parser.parse_args()
 
-    ar = AutoRec(args.ratings_path, 512, 100, 200, 256, 0.1)
+    ar = AutoRec(args.ratings_path, args.movies_path, 100, 200, 256, 0.1)
     if args.mode == 'train':
         ar.train()
     elif args.mode == 'infer':
