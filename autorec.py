@@ -5,6 +5,7 @@
 import argparse
 from os.path import isfile, isdir, join
 from os import mkdir
+import pickle
 
 import tensorflow as tf
 import pandas as pd
@@ -15,14 +16,16 @@ from sklearn.metrics import mean_squared_error as MSE
 
 
 class AutoRec:
-    def __init__(self, ratings_path, batch_size, epochs, hl_size, learning_rate,
+    def __init__(self, ratings_path, movies_path, batch_size, epochs, hl_size, learning_rate,
                  dataset_split_ratio=0.8, save_dir='./models/'):
-        for file_path in (ratings_path,):
+        for file_path in (ratings_path, movies_path):
             assert isfile(file_path), "{} is not valid file path".format(file_path)
 
         self.ratings_path = ratings_path
+        self.movies_path = movies_path
 
         self.ratings = None
+        self.movies = None
         self.num_movies = None
         self.num_users = None
         self.model_dict = None
@@ -40,6 +43,7 @@ class AutoRec:
     def _load_dataframes(self):
         """Loads .dat files as Pandas Dataframes."""
         self.ratings = pd.read_csv(self.ratings_path, sep="::", header=None, engine='python')
+        self.movies = pd.read_csv(self.movies_path, sep="::", header=None, engine='python')
         # get number of columns (movies) from user-item matrix
         self.num_movies = self.ratings.shape[-1]
 
@@ -90,6 +94,9 @@ class AutoRec:
 
     def train(self):
         """Run training of the network."""
+        if not self.ratings:
+            self.prepare()
+
         # initialize variables and start the session
         init = tf.global_variables_initializer()
         sess = tf.Session()
@@ -100,6 +107,11 @@ class AutoRec:
 
         # get training data
         x_train, x_test = self._create_datasets()
+
+        # serialize testing data for later inference
+        with open('./test.pkl', 'wb') as f:
+            pickle.dump(x_test, f)
+
         self.num_users = int(x_train.shape[0])
 
         # run training loop
@@ -115,22 +127,62 @@ class AutoRec:
                 output_train = sess.run(self.model_dict['output'], feed_dict={self.model_dict['input']: x_train})
                 output_test = sess.run(self.model_dict['output'], feed_dict={self.model_dict['input']: x_test})
 
-            if epoch % 2 == 0:
+            if epoch % 50 == 0:
                 save_path = saver.save(sess, join(self.save_dir, 'model_e:{}_l:{}.ckpt'.format(epoch, temp_loss)))
                 print("Model saved in path: %s" % save_path)
 
             # log progress
-            print('Epoch {}/{}, loss: {}').format(epoch, self.epochs, temp_loss)
+            print('Epoch {}/{}, loss: {}'.format(epoch, self.epochs, temp_loss))
             print('Training MSE:', MSE(output_train, x_train))
             print('Testing MSE:', MSE(output_test, x_test))
+
+    def infer(self, model_path, user_id):
+        """Return predicted ratings for user from test set."""
+        if not self.ratings:
+            self.prepare()
+
+        # reset graph
+        tf.reset_default_graph()
+
+        # initialize saver
+        saver = tf.train.Saver()
+
+        # initialize
+        sess = tf.Session()
+        saver.restore(sess, model_path)
+
+        with open('./test.pkl', 'rb') as f:
+            x_test = pickle.load(f)
+
+        try:
+            user_data = x_test.iloc[user_id, :]
+        except Exception as ex:
+            print("Wrong user id, try different one.\n", str(ex))
+            exit()
+
+        user_pred = sess.run(self.model_dict['output'],
+                             feed_dict={self.model_dict['input']: [user_data]})
+        return user_pred
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", type=str, required=True,
+                        help="Either train or infer")
     parser.add_argument("--ratings_path", type=str, required=True,
-                        help="Path to ratings.")
+                        help="Path to ratings data.")
+    parser.add_argument("--movies_path", type=str, required=True,
+                        help="Path to movies data.")
+    parser.add_argument("--model_path", type=str, required=False,
+                        help="Path to movies data.")
+    parser.add_argument("--user_id", type=str, required=False,
+                        help="Id for inference.")
     args = parser.parse_args()
 
     ar = AutoRec(args.ratings_path, 512, 100, 200, 256, 0.1)
-    ar.prepare()
-    ar.train()
+    if args.mode == 'train':
+        ar.train()
+    elif args.mode == 'infer':
+        assert isfile(args.model_path)
+        ar.infer(args.model_path, args.user_id)
+
