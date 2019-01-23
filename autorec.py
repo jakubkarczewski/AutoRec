@@ -42,7 +42,8 @@ class AutoRec:
 
     def _load_dataframes(self):
         """Loads .dat files as Pandas Dataframes."""
-        self.ratings = pd.read_csv(self.ratings_path, sep="::", header=None, engine='python')
+        ratings_flat = pd.read_csv(self.ratings_path, sep="::", header=None, engine='python')
+        self.ratings = pd.pivot_table(ratings_flat[[0, 1, 2]], values=2, index=0, columns=1).fillna(0)
         self.movies = pd.read_csv(self.movies_path, sep="::", header=None, engine='python')
         # get number of columns (movies) from user-item matrix
         self.num_movies = self.ratings.shape[-1]
@@ -124,10 +125,10 @@ class AutoRec:
                                                       self.model_dict['gt']: epoch_data})
                 temp_loss += partial_loss
 
-                output_train = sess.run(self.model_dict['output'], feed_dict={self.model_dict['input']: x_train})
-                output_test = sess.run(self.model_dict['output'], feed_dict={self.model_dict['input']: x_test})
+            output_train = sess.run(self.model_dict['output'], feed_dict={self.model_dict['input']: x_train})
+            output_test = sess.run(self.model_dict['output'], feed_dict={self.model_dict['input']: x_test})
 
-            if epoch % 50 == 0:
+            if epoch % 100 == 0:
                 save_path = saver.save(sess, join(self.save_dir, 'model_e:{}_l:{}.ckpt'.format(epoch, temp_loss)))
                 print("Model saved in path: %s" % save_path)
 
@@ -135,6 +136,9 @@ class AutoRec:
             print('Epoch {}/{}, loss: {}'.format(epoch, self.epochs, temp_loss))
             print('Training MSE:', MSE(output_train, x_train))
             print('Testing MSE:', MSE(output_test, x_test))
+
+        save_path = saver.save(sess, join(self.save_dir, 'model_final.ckpt'))
+        print("Final model saved in path: %s" % save_path)
 
     def infer(self, model_path, user_id):
         """Return predicted ratings for user from test set."""
@@ -164,6 +168,10 @@ class AutoRec:
                              feed_dict={self.model_dict['input']: [user_data]})
         return user_pred
 
+    def get_recommendation(self, estimated_ratings, top_n):
+        """Retuns top-N titles for given test user id."""
+        pass
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -177,9 +185,11 @@ if __name__ == '__main__':
                         help="Path to movies data.")
     parser.add_argument("--user_id", type=str, required=False,
                         help="Id for inference.")
+    parser.add_argument("--epochs", type=int, default=200,
+                        help="Number of epochs.")
     args = parser.parse_args()
 
-    ar = AutoRec(args.ratings_path, args.movies_path, 100, 200, 256, 0.1)
+    ar = AutoRec(args.ratings_path, args.movies_path, 100, args.epochs, 256, 0.1)
     if args.mode == 'train':
         ar.train()
     elif args.mode == 'infer':
