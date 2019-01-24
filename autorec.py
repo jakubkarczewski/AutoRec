@@ -144,10 +144,10 @@ class AutoRec:
             print('Testing MSE:', mse_test)
 
             # update history
-            training_history['epochs'] = epoch
-            training_history['loss'] = temp_loss
-            training_history['mse_train'] = mse_train
-            training_history['mse_test'] = mse_test
+            training_history['epochs'].append(epoch)
+            training_history['loss'].append(temp_loss)
+            training_history['mse_train'].append(mse_train)
+            training_history['mse_test'].append(mse_test)
 
         save_path = saver.save(sess, join(self.save_dir, 'model_final.ckpt'))
         print("Final model saved in path: %s" % save_path)
