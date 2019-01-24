@@ -6,18 +6,18 @@ import argparse
 from os.path import isfile, isdir, join
 from os import mkdir
 import pickle
+from heapq import nlargest
 
 import tensorflow as tf
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error as MSE
 
 
 class AutoRec:
     def __init__(self, ratings_path, movies_path, batch_size, epochs, hl_size, learning_rate,
-                 dataset_split_ratio=0.8, save_dir='./models/'):
+                 dataset_split_ratio=0.8, save_dir='./models/', top_n=20):
         for file_path in (ratings_path, movies_path):
             assert isfile(file_path), "{} is not valid file path".format(file_path)
 
@@ -35,6 +35,7 @@ class AutoRec:
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.dataset_split_ratio = dataset_split_ratio
+        self.top_n = top_n
 
         if not isdir(save_dir):
             mkdir(save_dir)
@@ -44,7 +45,8 @@ class AutoRec:
         """Loads .dat files as Pandas Dataframes."""
         ratings_flat = pd.read_csv(self.ratings_path, sep="::", header=None, engine='python')
         self.ratings = pd.pivot_table(ratings_flat[[0, 1, 2]], values=2, index=0, columns=1).fillna(0)
-        self.movies = pd.read_csv(self.movies_path, sep="::", header=None, engine='python')
+        self.movies = pd.read_csv(self.movies_path, sep="::", header=None, engine='python',
+                                  names=['movie_id', 'title', 'genere'])
         # get number of columns (movies) from user-item matrix
         self.num_movies = self.ratings.shape[-1]
 
@@ -115,6 +117,7 @@ class AutoRec:
 
         self.num_users = int(x_train.shape[0])
 
+        training_history = {'epochs': [], 'loss': [], 'mse_train': [], 'mse_test': []}
         # run training loop
         for epoch in range(self.epochs):
             temp_loss = 0
@@ -132,21 +135,34 @@ class AutoRec:
                 save_path = saver.save(sess, join(self.save_dir, 'model_e:{}_l:{}.ckpt'.format(epoch, temp_loss)))
                 print("Model saved in path: %s" % save_path)
 
+            mse_train = MSE(output_train, x_train)
+            mse_test = MSE(output_test, x_test)
+
             # log progress
             print('Epoch {}/{}, loss: {}'.format(epoch, self.epochs, temp_loss))
-            print('Training MSE:', MSE(output_train, x_train))
-            print('Testing MSE:', MSE(output_test, x_test))
+            print('Training MSE:', mse_train)
+            print('Testing MSE:', mse_test)
+
+            # update history
+            training_history['epochs'] = epoch
+            training_history['loss'] = temp_loss
+            training_history['mse_train'] = mse_train
+            training_history['mse_test'] = mse_test
 
         save_path = saver.save(sess, join(self.save_dir, 'model_final.ckpt'))
         print("Final model saved in path: %s" % save_path)
 
-    def infer(self, model_path, user_id):
-        """Return predicted ratings for user from test set."""
-        if not self.ratings:
-            self.prepare()
+        # dump history
+        with open('./training_history.pkl', 'wb') as f:
+            pickle.dump(training_history, f)
 
+    def infer(self, model_path):
+        """Return predicted ratings for user from test set."""
         # reset graph
         tf.reset_default_graph()
+
+        if not self.ratings:
+            self.prepare()
 
         # initialize saver
         saver = tf.train.Saver()
@@ -158,19 +174,41 @@ class AutoRec:
         with open('./test.pkl', 'rb') as f:
             x_test = pickle.load(f)
 
-        try:
-            user_data = x_test.iloc[user_id, :]
-        except Exception as ex:
-            print("Wrong user id, try different one.\n", str(ex))
-            exit()
-
+        user_id = np.random.choice(list(x_test.index))
+        user_data = x_test.loc[user_id, :]
         user_pred = sess.run(self.model_dict['output'],
                              feed_dict={self.model_dict['input']: [user_data]})
-        return user_pred
+        return {'user_id': user_id, 'estimated_ratings': user_pred}
 
-    def get_recommendation(self, estimated_ratings, top_n):
-        """Retuns top-N titles for given test user id."""
-        pass
+    def get_recommendation(self, user_id, estimated_ratings):
+        """Returns top-N titles for given test user id."""
+        print('Preparing recommendations for user id:', user_id)
+        # ratings_flat = pd.read_csv('./ml-1m/ratings.dat', sep="::", header=None, engine='python',
+        #                            names=['user_id', 'movie_id', 'rating', 'timestamp'])
+        # ratings = pd.pivot_table(ratings_flat[['user_id', 'movie_id', 'rating']], values='rating', index='user_id',
+        #                          columns='movie_id')
+
+        assert len(estimated_ratings[0]) == self.num_movies
+        movie_ids = list(self.movies.index)
+        rat_id = {i: val for i, val in enumerate(estimated_ratings[0])}
+        selected_movie_ids = nlargest(self.top_n, rat_id, key=rat_id.get)
+
+        # todo: fix shape mismatch
+        # print('With following ratings:')
+        # for index, rating in ratings.loc[user_id, :].dropna().iteritems():
+        #     print(self.movies.iloc[index, 1], 'rating: ', rating)
+
+        # print(selected_movie_ids)
+        #
+        print('Recommendations:')
+        for index in selected_movie_ids:
+            valid_index = movie_ids[index]
+            print(self.movies.iloc[valid_index, 1])
+
+        # max_id = max(rat_id, key=rat_id.get)
+        # print('Rating', rat_id[max_id])
+        # valid_index = movie_ids[max_id]
+        # print(self.movies.iloc[valid_index, 1])
 
 
 if __name__ == '__main__':
@@ -193,6 +231,6 @@ if __name__ == '__main__':
     if args.mode == 'train':
         ar.train()
     elif args.mode == 'infer':
-        assert isfile(args.model_path)
-        ar.infer(args.model_path, args.user_id)
+        rv = ar.infer(args.model_path)
+        ar.get_recommendation(**rv)
 
