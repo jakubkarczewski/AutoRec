@@ -16,6 +16,8 @@ from sklearn.metrics import mean_squared_error as MSE
 
 
 class AutoRec:
+    RANDOM_SEED = 1
+
     def __init__(self, ratings_path, movies_path, batch_size, epochs, hl_size, learning_rate,
                  dataset_split_ratio=0.8, save_dir='./models/', top_n=20):
         for file_path in (ratings_path, movies_path):
@@ -92,28 +94,32 @@ class AutoRec:
 
     def _create_datasets(self):
         """Creates and returns datasets from raw Dataframes."""
-        x_train, x_test = train_test_split(self.ratings, train_size=self.dataset_split_ratio)
+        x_train, x_test = train_test_split(self.ratings, train_size=self.dataset_split_ratio,
+                                           random_state=self.RANDOM_SEED)
         return x_train, x_test
 
-    def train(self):
+    def train(self, from_model=None):
         """Run training of the network."""
+        if from_model:
+            tf.reset_default_graph()
+
         if not self.ratings:
             self.prepare()
-
-        # initialize variables and start the session
-        init = tf.global_variables_initializer()
-        sess = tf.Session()
-        sess.run(init)
 
         # initialize saver
         saver = tf.train.Saver()
 
+        # initialize variables and start the session
+        init = tf.global_variables_initializer()
+        sess = tf.Session()
+
+        if not from_model:
+            sess.run(init)
+        else:
+            saver.restore(sess, from_model)
+
         # get training data
         x_train, x_test = self._create_datasets()
-
-        # serialize testing data for later inference
-        with open('./test.pkl', 'wb') as f:
-            pickle.dump(x_test, f)
 
         self.num_users = int(x_train.shape[0])
 
@@ -171,8 +177,8 @@ class AutoRec:
         sess = tf.Session()
         saver.restore(sess, model_path)
 
-        with open('./test.pkl', 'rb') as f:
-            x_test = pickle.load(f)
+        # get testing data
+        _, x_test = self._create_datasets()
 
         user_id = np.random.choice(list(x_test.index))
         user_data = x_test.loc[user_id, :]
@@ -183,32 +189,16 @@ class AutoRec:
     def get_recommendation(self, user_id, estimated_ratings):
         """Returns top-N titles for given test user id."""
         print('Preparing recommendations for user id:', user_id)
-        # ratings_flat = pd.read_csv('./ml-1m/ratings.dat', sep="::", header=None, engine='python',
-        #                            names=['user_id', 'movie_id', 'rating', 'timestamp'])
-        # ratings = pd.pivot_table(ratings_flat[['user_id', 'movie_id', 'rating']], values='rating', index='user_id',
-        #                          columns='movie_id')
 
         assert len(estimated_ratings[0]) == self.num_movies
         movie_ids = list(self.movies.index)
         rat_id = {i: val for i, val in enumerate(estimated_ratings[0])}
         selected_movie_ids = nlargest(self.top_n, rat_id, key=rat_id.get)
 
-        # todo: fix shape mismatch
-        # print('With following ratings:')
-        # for index, rating in ratings.loc[user_id, :].dropna().iteritems():
-        #     print(self.movies.iloc[index, 1], 'rating: ', rating)
-
-        # print(selected_movie_ids)
-        #
         print('Recommendations:')
         for index in selected_movie_ids:
             valid_index = movie_ids[index]
             print(self.movies.iloc[valid_index, 1])
-
-        # max_id = max(rat_id, key=rat_id.get)
-        # print('Rating', rat_id[max_id])
-        # valid_index = movie_ids[max_id]
-        # print(self.movies.iloc[valid_index, 1])
 
 
 if __name__ == '__main__':
@@ -229,7 +219,7 @@ if __name__ == '__main__':
 
     ar = AutoRec(args.ratings_path, args.movies_path, 100, args.epochs, 256, 0.1)
     if args.mode == 'train':
-        ar.train()
+        ar.train(from_model=args.model_path)
     elif args.mode == 'infer':
         rv = ar.infer(args.model_path)
         ar.get_recommendation(**rv)
